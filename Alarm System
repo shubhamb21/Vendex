@@ -101,7 +101,7 @@ pred_train0 = predict(m, newdata = train, type = "response")
 pred_test0 = predict(m, newdata = test, type = "response")
 ```
 
-## ========================== Questions Answer the following questions:=============== ## 
+## ========================== Answering some questions:=============== ## 
 a. [1 point] What’s the AUC, a measure of quality, of the model you have built on the train set? and on test set?
 
 ```{r}
@@ -114,13 +114,13 @@ auc(train$failure, pred_train0)
 auc(test$failure, pred_test0)
 ```
 
-b. [1 point] Plot the function of probability of failure with respect to delta to gain intuition:
+b. Plot the function of probability of failure with respect to delta to gain intuition:
 
 ```{r}
 curve(1/(1+exp(-(m$coefficients[[1]] + m$coefficients[[2]]*x))), from = 0, to = 20)
 ```
 
-c. [1 point] Let us create alarms with two levels of priority: med-risk and high-risk. Med-risk alarms will fire when the probability of failure is >=60% and High-risk when that probability is >=80%.
+c. Let us create alarms with two levels of priority: med-risk and high-risk. Med-risk alarms will fire when the probability of failure is >=60% and High-risk when that probability is >=80%.
      i. What are the threshold deltas for each type of alarm to fire?
      
 ```{r}
@@ -179,7 +179,7 @@ paste0('False alarm percentage for threshold 60%: ', round(complete_data[delta >
 paste0('False alarm percentage for threshold 80%: ', round(complete_data[delta >= delta_0.8, .N, by = failure][failure==0]$N / nrow(alarm_80) * 100, 2), '%')  # 8.48%
 ```
 
-d. [2 points] In this exercise we will estimate the profit impact of our EWS system vs the current system:
+d. In this exercise we will estimate the profit impact of our EWS system vs the current system:
     # i. If we set the EWS only with the med-risk alarms, what is the annual profit we will generate vs the current system as a % of the total profit? [For simplicity, consider the total profit to be the margin per item times the number of items in the period]
     # ii. And if we set the EWS only with the high-risk alarms?
         # Assumptions:

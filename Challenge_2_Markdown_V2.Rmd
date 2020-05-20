@@ -1,0 +1,347 @@
+---
+title: 'Data Analytics with R: Challenge 2'
+author: Shubham Batra, Tilman du Bosque, Andrea Simon Perl, Georgina Roca Martorell,
+  Yue Qin
+date: "28/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Preparation: Import libraries and datasets
+
+```{r}
+library(data.table)
+library(pROC)
+library(stats)
+library(tidyverse)
+# library(lubricate)
+machine_data <- fread('./machine_data.csv')
+product_data <- fread('./product_data.csv')
+transactional_data <- fread('./transactional_data.csv')
+machine_failures <- fread('./machine_failures.csv')
+```
+
+## ========================== Creating the relevant variable of the model:============= ##
+
+1. Merge the transactional dataset with the machine failures data set setting failure variable to 0 when no failure is recorded.
+
+
+```{r}
+#merge machine_faliures with transactinoal data
+complete_data = merge(transactional_data,machine_failures, by=c("machine", "timestamp"),all.x=T)
+
+#set all the cols in "failure" for days without failure
+complete_data[is.na(failure),failure:=0]
+```
+
+2. In the transactional data table, create a variable called “last_vend” containing the timestamp of the previous sale of each machine
+
+```{r}
+complete_data[order(machine, timestamp)]
+complete_data[,last_vend:=shift(timestamp,1), by = machine]
+```
+
+3. Create a new variable in the transactional data table called “deltahours” containing, for every sale, the hours that passed since the last sale
+
+```{r}
+complete_data[, deltahours:= difftime(timestamp, last_vend, units='hours') ]
+```
+
+4. Create an auxiliary data table called “machine_daily_average” with the average daily sales per machine. Use this auxiliary table to attach to every row of the transactional data table the the average daily sales per machine. You can do this by doing a merge.
+
+```{r}
+#average daily sales per machine
+#transactions per machine -> we consider active days to be also the ones where the machine have a failure 
+
+trans_per_machine = transactional_data[, .(.N), by = machine][order(machine)]
+
+# Number of days that each machine was working
+working_days = complete_data[,.(num_days = uniqueN(date)), by = "machine"]
+
+num_prod = complete_data[, .(num_prod = .N), by = "machine"]
+machine_daily_average = num_days[, .(daily_sales_machine = num_prod$num_prod/num_days, machine)]
+
+complete_data = merge(complete_data, machine_daily_average, by = "machine")
+```
+
+5. Create a new variable called “delta” in the transactional data table containing a normalized version of deltahours consisting on the deltahours associated with each sale divided by the average deltahours of each machine i.e. delta = deltahours /(24/daily_sales_machine). The interpretation of delta is the amount of “missed sales” if the machine was selling at a constant rate
+
+```{r}
+complete_data[, delta:= as.numeric(deltahours) /(24/daily_sales_machine)]
+```
+
+## ========================== Creating the model ========================== ##
+6. Select 30% of the machines in the transactional data for testing and 70% of the machines for training and train a linear logistic regression model called “m” to predict whether a machine has a failure as a function of variable delta. What is the value of the intercept and the coefficient accompanying variable delta?
+    # Hint: Recall the syntax for the linear model is glm(target~ variable,data,family=’binomial’).
+    # You can select 70% machines out of a machine list v, for example, with function sample(v,round(0.7*length(v),0),replace=F). Use help(sample) for more information
+
+```{r}
+#creating the model
+
+machine_list <- unique(complete_data$machine)
+
+#setting seed to 10 to obtain the same results
+set.seed(10)
+training_machine_list <- sample(machine_list,
+                                round(0.7*length(machine_list), 0),
+                                replace = F)
+
+#creating train and test set
+train <- complete_data[machine %in% training_machine_list]
+test_machine_list <- setdiff(machine_list, training_machine_list)
+test <- complete_data[machine %in% test_machine_list]
+
+m = glm(failure ~ delta,data = train,family="binomial")
+summary(m)
+
+pred_train0 = predict(m, newdata = train, type = "response")
+pred_test0 = predict(m, newdata = test, type = "response")
+```
+
+## ========================== Questions Answer the following questions:=============== ## 
+a. [1 point] What’s the AUC, a measure of quality, of the model you have built on the train set? and on test set?
+
+```{r}
+#AUC for training set
+auc(train$failure, pred_train0) 
+```
+
+```{r}
+#AUC for test set
+auc(test$failure, pred_test0)
+```
+
+b. [1 point] Plot the function of probability of failure with respect to delta to gain intuition:
+
+```{r}
+curve(1/(1+exp(-(m$coefficients[[1]] + m$coefficients[[2]]*x))), from = 0, to = 20)
+```
+
+c. [1 point] Let us create alarms with two levels of priority: med-risk and high-risk. Med-risk alarms will fire when the probability of failure is >=60% and High-risk when that probability is >=80%.
+     i. What are the threshold deltas for each type of alarm to fire?
+     
+```{r}
+#finding root for medium risk alarm
+f_0.6 <- function(x) {(1/(1+exp(-(m$coefficients[1] + m$coefficients[2]*x)))) - 0.6}
+root_0.6 <- uniroot(f_0.6, c(0, 20))
+delta_0.6 <- root_0.6$root  # Probability 60% - Threshold delta = 13.05173
+delta_0.6
+```
+
+```{r}
+#finding root for high risk alarm
+f_0.8 <- function(x) {(1/(1+exp(-(m$coefficients[1] + m$coefficients[2]*x)))) - 0.8}
+root_0.8 <- uniroot(f_0.8, c(0, 20))
+delta_0.8 <- root_0.8$root  # Probability 80% - Threshold delta = 14.80257
+delta_0.8
+```
+
+ii. How many of these alarms would be fired per day on average according to your model? Hint: Divide the number of alarms (transactions where the delta exceeds the threshold delta for each type of alarm) by the total number of days
+
+```{r}
+alarm_60 <- complete_data[delta >= delta_0.6]
+nrow(alarm_60)  
+uniqueN(alarm_60$date)  
+
+alarm_80 <- complete_data[delta >= delta_0.8]
+nrow(alarm_80)  
+uniqueN(alarm_80$date)  
+
+# If we calculate alarms per day for: failure_prob ∈ [0.6, +∞)
+alarm_60_perDay <- nrow(alarm_60) / 90
+alarm_60_perDay
+```
+
+```{r}
+# If we calculate alarms per day for: failure_prob ∈ [0.8, +∞)
+alarm_80_perDay <- nrow(alarm_80) / 90
+alarm_80_perDay  
+```
+
+```{r}
+#  If we calculate alarms per day for: failure_prob ∈ [0.6, 0.8), which is not meaningful, we will not discuss this situation in future questions.
+alarm_60_80_perDay <- (nrow(alarm_60) - nrow(alarm_80)) / 90
+alarm_60_80_perDay  
+```
+
+iii. What % of these will be “false alarms” i.e. failure variable is equal to 0, for each level of priority?
+
+```{r}
+# failure_prob threshold == 60%
+paste0('False alarm percentage for threshold 60%: ', round(complete_data[delta >= delta_0.6, .N, by = failure][failure==0]$N / nrow(alarm_60) * 100, 2), '%')  # 19.7%
+```
+
+```{r}
+# failure_prob threshold == 80%
+paste0('False alarm percentage for threshold 80%: ', round(complete_data[delta >= delta_0.8, .N, by = failure][failure==0]$N / nrow(alarm_80) * 100, 2), '%')  # 8.48%
+```
+
+d. [2 points] In this exercise we will estimate the profit impact of our EWS system vs the current system:
+    # i. If we set the EWS only with the med-risk alarms, what is the annual profit we will generate vs the current system as a % of the total profit? [For simplicity, consider the total profit to be the margin per item times the number of items in the period]
+    # ii. And if we set the EWS only with the high-risk alarms?
+        # Assumptions:
+          # - The time to go and fix a machine is 1.5 hours after an alarm is fired
+          # - The cost of an operator checking if the machine is broken is 10 euros (transport + checking). You will use this to calculate the cost of “false alarms” with our system
+          # - Do not consider any cost of repairing the machine since this cost needs to be done also with the current system
+          # - Vendex reports that their current system generates 2.2 false alarms per machine and year
+          # - Every item sold leaves 1.7 euros of margin on average. You will use this to calculate the impact of the “saved sales” thanks to our new EWS system
+
+```{r}
+# --1) -------
+#d:i if EWS is set only on the medium risk alarms
+# 1. Selecting transactions that would generate an alarm
+dt_alarm_med <- alarm_60  
+
+# 2. calculating amount of hours without sales corresponding to the threshold hours
+dt_alarm_med = dt_alarm_med[, threshold_hours := delta_0.6*24/daily_sales_machine]
+
+# 3. Adding 1.5 hours to the threshold hours to take into account the repair time 
+dt_alarm_med = dt_alarm_med[, threshold_hours_fixed:= threshold_hours + 1.5]
+dt_alarm_med = dt_alarm_med[, delta_fixed:= threshold_hours_fixed*1/(24/daily_sales_machine)]
+
+# 4. Calculating "won sales"
+dt_alarm_med = dt_alarm_med[, won_sales:=failure*(delta - delta_fixed)]
+
+# 5. Calculating additional revenue
+margin_preItem = 1.7
+additional_rev_med = sum(dt_alarm_med$won_sales)*margin_preItem #-4071.801
+additional_rev_med
+```
+
+```{r}
+# 6. calculating cost of checking false alarms
+cost_med = sum(dt_alarm_med$failure==0)*10
+cost_med
+```
+
+```{r}
+# 7. Calculating profit increase over current system
+current_total_profit <- margin_preItem * uniqueN(transactional_data$timestamp)
+
+profit_increase_med <- (additional_rev_med - cost) / current_total_profit
+profit_increase_med
+```
+
+# ===================================================== #
+
+```{r}
+#d:ii if EWS is set only on the high risk alarms
+
+# 1. Selecting transactions that would generate an alarm
+dt_alarm_high <- alarm_80  
+
+# 2. Ycalculating amount of hours without sales corresponding to the threshold hours
+dt_alarm_high = dt_alarm_high[, threshold_hours:=delta_0.8*24/daily_sales_machine]
+
+# 3. YAdding 1.5 hours to the threshold hours to take into account the repair time 
+dt_alarm_high = dt_alarm_high[, threshold_hours_fixed:= threshold_hours + 1.5]
+dt_alarm_high = dt_alarm_high[, delta_fixed:= threshold_hours_fixed*1/(24/daily_sales_machine)]
+
+# 4. Calculating "won sales"
+dt_alarm_high = dt_alarm_high[, won_sales:=failure*(delta - delta_fixed)]
+
+# 5. Calculating additional revenue
+
+additional_rev_high = sum(dt_alarm_high$won_sales)*1.7
+additional_rev_high 
+```
+
+```{r}
+# 6. Calculating cost of checking false alarms
+cost_high = sum(dt_alarm_high$failure==0, na.rm = T)*10
+cost_high
+```
+
+```{r}
+# 7. Calculating profit increase over current system
+current_total_profit <- margin_preItem * uniqueN(transactional_data$timestamp)
+
+profit_increase_high <- (additional_rev_high - cost) / current_total_profit
+profit_increase_high
+```
+
+# ===================================================== #
+
+# When using the aforementioned approach (according to the hints) to calculate the difference between `delta` and `delta_fixed`, we didn't count the repairing time for the current system; that is to say, we didn't add 1.5 hrs to the `deltahours` from the last vending. So purely out of curiosity and an intention of comparison, we add that repairing time to the current system to check the profit increase our system might procoke.
+
+```{r}
+# --3) -------
+
+#d:i if EWS is set only on the medium risk alarms
+# 1. Selecting transactions that would generate an alarm
+dt_alarm_med <- alarm_60  
+
+# 2. Calculating amount of hours without sales corresponding to the threshold hours
+dt_alarm_med = dt_alarm_med[, threshold_hours := delta_0.6*24/daily_sales_machine]
+
+# 3. Adding 1.5 hours to the threshold hours to take into account the repair time 
+dt_alarm_med = dt_alarm_med[, threshold_hours_fixed:= threshold_hours + 1.5]
+dt_alarm_med = dt_alarm_med[, delta_fixed:= threshold_hours_fixed*1/(24/daily_sales_machine)]
+dt_alarm_med = dt_alarm_med[, delta_current_fixed := (as.numeric(deltahours) + 1.5)*1/(24/daily_sales_machine)]
+
+# 4.  Calculating "won sales"
+dt_alarm_med = dt_alarm_med[, won_sales:=failure*(delta_current_fixed - delta_fixed)]
+
+# 5. Calculating additional revenue
+margin_preItem = 1.7
+additional_rev_med = sum(dt_alarm_med$won_sales)*margin_preItem #-4071.801
+additional_rev_med
+```
+
+```{r}
+# 6. Calculating cost of checking false alarms
+cost_med = sum(dt_alarm_med$failure==0)*10
+cost_med 
+```
+
+```{r}
+# 7. T Calculating profit increase over current system
+current_total_profit <- margin_preItem * uniqueN(transactional_data$timestamp)
+
+profit_increase_med <- (additional_rev_med - cost) / current_total_profit
+profit_increase_med
+```
+
+# ===================================================== #
+
+```{r}
+# ===================================================== #
+# --4) -------
+#d:ii if EWS is set only on the high risk alarms
+# 1. Selecting transactions that would generate an alarm
+dt_alarm_high <- alarm_80  
+
+# 2.  Calculating amount of hours without sales corresponding to the threshold hours
+dt_alarm_high = dt_alarm_high[, threshold_hours:=delta_0.8*24/daily_sales_machine]
+
+# 3. Adding 1.5 hours to the threshold hours to take into account the repair time 
+dt_alarm_high = dt_alarm_high[, threshold_hours_fixed:= threshold_hours + 1.5]
+dt_alarm_high = dt_alarm_high[, delta_fixed:= threshold_hours_fixed*1/(24/daily_sales_machine)]
+dt_alarm_high = dt_alarm_high[, delta_current_fixed := (as.numeric(deltahours) + 1.5)*1/(24/daily_sales_machine)]
+
+# 4. Calculating "won sales"
+dt_alarm_high = dt_alarm_high[, won_sales:=failure*(delta_current_fixed - delta_fixed)]
+
+# 5. Calculating additional revenue
+additional_rev_high = sum(dt_alarm_high$won_sales)*1.7
+additional_rev_high 
+```
+
+```{r}
+# 6. Calculating cost of checking false alarms
+cost_high = sum(dt_alarm_high$failure==0, na.rm = T)*10
+cost_high 
+```
+
+```{r}
+# 7. Calculating profit increase over current system
+current_total_profit <- margin_preItem * uniqueN(transactional_data$timestamp)
+
+profit_increase_high <- (additional_rev_high - cost) / current_total_profit
+profit_increase_high
+```
+
+# Conclusion; if we take into consideration the repairing time for the current system, the increase of profit will be even higher.

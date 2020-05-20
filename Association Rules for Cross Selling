@@ -1,0 +1,232 @@
+#Using Association Rules to discover what items are genreally purchased together
+
+library(data.table)
+library(dplyr)
+library(arules)
+library(arulesViz) # for visualization of the rules
+
+# IMPORTS & BASKETS ID  -------------------------------------------------------------
+# Assumption: transactions in same machine, same date and difference of <= 30 seconds, we will assume same person. So same basket, same transaction ID ('index' column in the Excel sheets).
+
+
+# Import data (Shubham created two tables with Excel for the baskets' ID):
+
+total_data_1 <-  fread("./final_data/total_data1_new.csv", 
+                     sep = ',',
+                     dec = '.',
+                     header = T,
+                     stringsAsFactors = F)
+total_data_2 <-  fread("./final_data/total_data2_new.csv", 
+                     sep = ',',
+                     dec = '.',
+                     header = T,
+                     stringsAsFactors = F)
+
+total_data_b <-  bind_rows(total_data_1, total_data_2) # create combined table with the baskets id
+fwrite(total_data_b, "TOTAL_DATA_CS.csv")
+uniqueN(total_data_b$index) # 1537852 , index is the name for basket id
+
+# CREATE TRANSACTION OBJECT AND ASSOCIATION RULES -----------------------------------------
+
+# Create transactions object
+
+basket_id <-  c(total_data_b$index)
+product_name <-  c(total_data_b$product_name)
+data_2colsdf <-  data.frame(basket_id = basket_id, product_name = product_name) 
+fwrite(data_2colsdf, "2colsdf.csv")
+
+intrans_data <-  read.transactions("./2colsdf.csv", format = "single", # each line corresponds to a single item
+                                 header = TRUE, sep = ",", 
+                                 cols = c("basket_id","product_name"), rm.duplicates = FALSE, 
+                                 quote = "\"'", skip = 0)
+
+# Association rules
+
+rules <-  apriori(intrans_data, parameter = list(supp = 0.000001, conf = 0.8)) 
+
+  # problem with parameters, discuss with team!!!!!!!!!!!!!!! maybe not care because purchases normally only 2 pdcts and rules have more? lift is positive at least
+    #Support - is the percentage of instances which match antecedent and consequent.
+    #Confidence - is the percentage of instances in the antecedent which also ontain the consequent. So, support/coverage 
+
+inspect(rules[1:5]) # just check
+
+rules <-  sort(rules, by = "conf", decreasing = T)
+inspect(rules[1:5])
+
+
+# Identify redundant rules and get rid of them
+
+rules # 1676 rules with supp = 0.000001, conf = 0.8
+redundant_rules <- is.redundant(rules)
+redundant_rules
+summary(redundant_rules)
+rules <- rules[!redundant_rules]
+rules
+inspect(rules[1:10])
+
+# VISUALIZATION ---------------------------------------------
+
+plot(rules, method="graph", interactive = T) # for all the rules, but not useful because it is too crowded...
+
+# ...so look at limited rules for example by product:
+  # ITEM) sugar_confectionary_incl_gums_1
+    individual_rule <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= "sugar_confectionary_incl_gums_1"))
+    inspect(individual_rule[1:10])
+  plot(individual_rule, method="graph", interactive = T)
+  
+
+# ECONOMIC IMPACT -------------------------------------------
+  # Assumptions:
+  # https://www.forbes.com/sites/chuckcohn/2015/05/15/a-beginners-guide-to-upselling-and-cross-selling/#518603a02912
+  # A.1 :based on article increase of 35%, so to be conservative let's assume 'only' 30%.
+  # A.2: the margin will be the average of the products that tend to be bought together
+  # A.3: n?pdct X sold * 0,30 * avg margin ;
+            # X is the rhs pdct for the top10 association rules
+            # Final economic impact of the lever is the sum of this for the top10 prodcts
+  #A.4: Highest impact for this lever for top10 items sold
+        # comment: LHS multiple products means 'and'
+
+#1) Create top10 items sold ranking.
+TD = fread('C:/Users/GEORGINA/Desktop/TERM 2/Data Analytics with R/Challenge 1/final_data/transactional_data.csv', header = TRUE, sep = ',', dec = '.')
+PD = fread('C:/Users/GEORGINA/Desktop/TERM 2/Data Analytics with R/Challenge 1/final_data/product_data.csv', header = TRUE, sep = ',', dec = '.')
+
+transactions_prod_sales <- TD[, .(num_sold = .N), by='product_name']
+ranked_prod_sales <- transactions_prod_sales[order(-num_sold)]
+top10 <- ranked_prod_sales[1:10]
+top10
+
+#Create margin/ product
+PD$margin = PD[,.(margin=(price*(1-tax_rate)-cost))]
+
+#2) For each of the top10 items, flip rhs and lhs, take the first pdct of list (highest metric)
+    #LHS vs RHS explanation: left-hand-side: this is what customer bought, right-hs: what they have bought with this/ese lhs item/s.
+
+  # P1) chocolate_based_1
+    rule_1 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[1]))
+    #just to check: # rule_1<- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= "chocolate_based_1"))
+    inspect(rule_1[1:10])
+    rule_1_sorted <-  sort(rule_1, by = "conf", decreasing = T)
+    inspect(rule_1_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_1_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_1_num_sold # 104639
+    pd_1_increase = pd_1_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_1_increase
+  
+    # P2) 
+    rule_2 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[2]))
+    inspect(rule_2[1:10])
+    rule_2_sorted <-  sort(rule_2, by = "conf", decreasing = T)
+    inspect(rule_2_sorted[1]) # top1: chocolate_based_1
+    
+    pd_2_num_sold = uniqueN(TD[product_name=="chocolate_based_1"])
+    pd_2_num_sold # 
+    pd_2_increase = pd_2_num_sold*0.3* PD$margin[PD$product_name == "chocolate_based_1"]
+    pd_2_increase
+    
+    # P3) 
+    rule_3 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[3]))
+    inspect(rule_1[1:10])
+    rule_3_sorted <-  sort(rule_3, by = "conf", decreasing = T)
+    inspect(rule_3_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_3_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_3_num_sold 
+    pd_3_increase = pd_3_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_3_increase
+    
+    # P4) 
+    rule_4 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[4]))
+    inspect(rule_4[1:10])
+    rule_4_sorted <-  sort(rule_4, by = "conf", decreasing = T)
+    inspect(rule_4_sorted[1]) # top1: 
+    
+    pd_4_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_4_num_sold # 
+    pd_4_increase = pd_4_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_4_increase
+    
+    
+    # P5) 
+    rule_5 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[5]))
+    inspect(rule_5[1:10])
+    rule_5_sorted <-  sort(rule_5, by = "conf", decreasing = T)
+    inspect(rule_5_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_5_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_5_num_sold 
+    pd_5_increase = pd_5_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_5_increase
+    
+    
+    # P6) 
+    rule_6 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[6]))
+    inspect(rule_1[1:10])
+    rule_6_sorted <-  sort(rule_6, by = "conf", decreasing = T)
+    inspect(rule_6_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_6_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_6_num_sold
+    pd_6_increase = pd_6_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_6_increase
+    
+    
+    # P7) 
+    rule_7 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[7]))
+    inspect(rule_7[1:10])
+    rule_7_sorted <-  sort(rule_7, by = "conf", decreasing = T)
+    inspect(rule_7_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_7_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_7_num_sold 
+    pd_7_increase = pd_1_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_7_increase
+    
+    # P8) 
+    rule_8 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[8]))
+    inspect(rule_8[1:10])
+    rule_8_sorted <-  sort(rule_1, by = "conf", decreasing = T)
+    inspect(rule_8_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_8_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_8_num_sold 
+    pd_8_increase = pd_8_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_8_increase
+    
+     # P9) 
+    rule_9 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[9]))
+    inspect(rule_9[1:10])
+    rule_9_sorted <-  sort(rule_1, by = "conf", decreasing = T)
+    inspect(rule_9_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_9_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_9_num_sold 
+    pd_9_increase = pd_9_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_9_increase
+    
+    # P10) 
+    rule_10 <- apriori(intrans_data, parameter = list(supp = 0.00000000001, conf = 0.01), appearance = list(default = "rhs", lhs= ranked_prod_sales$product_name[10]))
+    inspect(rule_10[1:10])
+    rule_10_sorted <-  sort(rule_10, by = "conf", decreasing = T)
+    inspect(rule_10_sorted[1]) # top1: sugar_confectionary_incl_gums_1
+    
+    pd_10_num_sold = uniqueN(TD[product_name=="sugar_confectionary_incl_gums_1"])
+    pd_10_num_sold # 
+    pd_10_increase = pd_10_num_sold*0.3* PD$margin[PD$product_name == "sugar_confectionary_incl_gums_1"]
+    pd_10_increase
+
+# TOTAL ECONOMICAL IMPACT:
+    total_increase_in_eur = pd_1_increase + pd_2_increase + pd_3_increase + pd_4_increase + pd_5_increase + pd_6_increase + pd_7_increase + pd_8_increase + pd_9_increase + pd_10_increase
+    total_increase_in_eur
+
+# CALCULATE PERCENTAGE OVER TOTAL:
+    # Total profit
+    PD_TD <- merge(TD, PD, by="product_name", all.x=T)
+    total_revenue <- merge(transactions_prod_sales, PD, by = "product_name")
+    total_revenue$total <- total_revenue$margin*total_revenue$num_sold    
+    total_revenue_vendex <- sum(total_revenue$total)# 3079598  
+    
+    # Percentage increase:
+    total_increase <- (total_increase_in_eur/total_revenue_vendex)
+    total_increase
+ 

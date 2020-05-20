@@ -1,0 +1,649 @@
+---
+title: "Data Analytics with R - Challenge 1 Report"
+author: Shubham Batra, Tilman du Bosque, Andrea Simon Perl, Georgina Roca Martorell,
+  Yue Qin
+date: "06-03-2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Table of Results
+
+**QUESTION** | **ANSWER**
+-------------- | ------------------
+**Question 1** | 
+-------------------------------------------------- | -------------------------------- *I. MACHINES*
+**a. Number of machines** | *2495*
+**b. Percentage of small machines** | *38.44%*
+**c. Location type distribution** | 
+-- Transport | *58.72%*
+-- Petrol Station | *13.75%*
+-- Others | *27.70%*
+-- N.A. | *0.04%*
+-------------------------------------------------- | -------------------------------- *II. PRODUCTS*
+**d.** | 
+**1) Number of products** | *63*
+**2) Highest number of products** | *Carbonates and energy drinks*
+**e.** | 
+**1) Overall** | 
+-- Highest average price | *Milk based*
+-- Lowest average price | *Sugar candy*
+**2) Within snacks** | 
+-- Highest average price | *Salty*
+-- Lowest average price | *sugar candy*
+**3) Within drinks** | 
+-- Highest average price | *Milk based*
+-- Lowest average price | *Juice, tea and smoothies*
+-------------------------------------------------- | -------------------------------- *III. TRANSACTIONS*
+**f. Average daily items in March** | 
+-- Small machines | *7.71*
+-- Big machines | *9.90*
+-------------------------------------------------- | --------------------------------------------------------------------
+**Question 2** | 
+**Patterns in the Data** | *Details in Question 2*
+-------------------------------------------------- | --------------------------------------------------------------------
+**Question 3** | 
+**Treatment with Outliers & NAs in `income_average`** | *Details in Question 3*
+-------------------------------------------------- | --------------------------------------------------------------------
+**Question 4** | 
+**Median number of hotels** | 0
+-------------------------------------------------- | --------------------------------------------------------------------
+**Question 5** | 
+**a. Variables without statistical significance** | *`total_number_of_routes_600`, `num_vendex_nearby_300`*
+**b. Statistical significance after logarithm** | *Yes*
+**c. Coefficient of `small_machine`** | *-2.02341*
+**d. Coefficient of `num_vendex_nearby_300`** | *-0.10322*
+**e. Top20%/bottom20% ratio** | *2.23*
+**f. New machine placement** | *Location 1*
+
+
+# Preparation: Import libraries and datasets
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(ggmap)
+library(tidyverse)
+machine_data = fread('/Users/robinho/Downloads/DATA/machine_data.csv')
+product_data = fread('/Users/robinho/Downloads/DATA/product_data.csv')
+transactional_data = fread('/Users/robinho/Downloads/DATA/transactional_data.csv')
+```
+
+# Question 1. General Overview of the Data
+
+**I. MACHINES**
+
+## a. How many machines are there?
+
+```{r}
+# Number of unique values
+uniqueN(machine_data$machine)
+# Number of N.A. values
+sum(is.na(machine_data$machine))
+```
+
+**Answer:** In the column of "machine" inside the table "machine_data", there are 2495 unique values without N.A. values, so in total, there are **2495 machines**.
+
+***
+
+## b. What percentage of the machines are small?
+
+```{r}
+# Number of small machines
+small_machine_number = machine_data[, .(.N), by = small_machine][2]$N
+# Percentage of small machines
+small_perct = round(small_machine_number / uniqueN(machine_data$machine) * 100,2)
+paste0(small_perct, '%')
+```
+
+**Answer:** The company has a **38.44%** of small machines.
+
+```{r, echo=FALSE}
+# library(plotrix)
+# pie3D(data,labels= c(small_perct*100,(1-small_perct)*100),explode=0.1,
+#       main="Percentage of small Machines")  # What is the "data"? ---------------
+```
+
+***
+
+## c. How do the machines distribute in terms of location type?
+
+```{r}
+location_type_distribution = machine_data[, .(.N), by = location_type]
+location_type_distribution$Percentage = round(location_type_distribution$N/2495 * 100, 2)
+location_type_distribution = location_type_distribution[order(-N)]
+location_type_distribution
+```
+
+```{r, echo=FALSE}
+# df <- data.frame(value = location_type_distribution$N,
+#                  Group = location_type_distribution$location_type) %>%
+#   mutate(Group = factor(Group, levels = c("N.A.", "petrol station", "others", "transport")),
+#          cumulative = cumsum(value),
+#          midpoint = cumulative - value / 2,
+#          label = paste0(Group, " ", round(value / sum(value) * 100, 2), "%"))
+# 
+# label = paste0(location_type_distribution$location_type, ' (', location_type_distribution$Percentage, '%', ')')
+# location_type = location_type_distribution$location_type
+ggplot(location_type_distribution,
+       aes(x = '', y = location_type_distribution$N, fill = location_type)) +
+  geom_bar(width = 1, position = "stack", stat = 'identity') +
+  coord_polar(theta = "y") +
+  labs(x = '', y = '', title = 'Distribution of Location Type', caption = 'Source: Self-elaborated') +
+  theme(axis.text = element_blank(), axis.ticks = element_blank())
+
+
+```
+
+**Answer:** In terms of location type, except **one** N.A. value, **58.52%** of the machines are at transport stations, **13.5%** are at petrol stations, and **27.70%** are at other places.
+
+***
+
+**II. PRODUCTS**
+
+## d.
+### 1) How many products are there? 
+```{r}
+# Number of unique values
+uniqueN(product_data$product_name)
+# Number of N.A. values
+sum(is.na(product_data$product_name))
+```
+    
+**Answer:** There are **63 unique products**.
+
+***
+
+### 2) Which category has the highest number of products?
+```{r}
+product_categories = product_data[,
+                                  .(number_of_products= .N),
+                                  by = category][order(-number_of_products)]
+product_categories
+```
+
+```{r category_barplot, echo=FALSE}
+# barplot(product_categories$number_of_products,
+#         names.arg = product_categories$category,
+#         main = "Products per Category",
+#         xlab = "Category",
+#         ylab = "Count",
+#         ylim = c(0, max(product_categories$number_of_products) * 1.1),
+#         las = 2,
+#         horiz = T)
+
+ggplot(data = product_categories,
+       aes(x = reorder(product_categories$category, product_categories$number_of_products), y = product_categories$number_of_products)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  xlab('Category of the Product') +
+  ylab('Number of Unique Products') + 
+  geom_text(aes(label=product_categories$number_of_products), hjust = 2, color="white", position = position_dodge(0.9), size=3.5) +
+  scale_fill_brewer(palette="Blues") +
+  labs(caption = 'Source: Self-elaborated')
+```
+
+**Answer:** **"Carbonates and energy drinks"** has the highest number of products.
+
+***
+
+## e. Which category has the highest and lowest average price? And within snacks or drinks?
+
+```{r}
+# Overall
+e1 = unique(product_data[, 
+                         .(type_drink_snack, round(mean(price), 2)),
+                         by = category][order(-V2)])
+colnames(e1) = c('category', 'type_drink_snack', 'average_price')
+e1
+```
+
+```{r, echo=FALSE}
+ggplot(data = e1,
+       aes(x = reorder(e1$category, e1$average_price), y = e1$average_price, color = type_drink_snack)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  xlab('Category of the Product') +
+  ylab('Average Price of the Category') + 
+  geom_text(aes(label=e1$average_price), hjust = 1.3, color="white", position = position_dodge(0.9), size=3.5) +
+  labs(caption = 'Source: Self-elaborated')
+```
+
+**Answer:**  
+
+Within all the products, **"milk based"** category has the highest average price and **"sugar candy"** category has the lowest.  
+
+```{r, echo=FALSE}
+# Within snacks
+# e2 = product_data[type_drink_snack == 'snack', round(mean(price), 2), by = category][order(-V1)]
+# colnames(e2) = c('category', 'average_price')
+# e2
+```
+
+Taking into consideration only the snacks, **"salty"** category has the highest average price and **"sugar candy"** category has the lowest.  
+
+```{r, echo=FALSE}
+# Within drinks
+# e3 = product_data[type_drink_snack == 'drink', round(mean(price), 2), by = category][order(-V1)]
+# colnames(e3) = c('category', 'average_price')
+# e3
+```
+
+Taking into consideration only the drinks, **"milk based"** category has the highest average price and **"juice, tea and smoothies"** category has the lowest.
+
+***
+
+**III. TRANSACTIONS**
+
+## f. Restricting the transactional data to March 2017, what’s the average daily items among small and big machines?. Why do you think there is such a difference? Give at least 2 possible reasons.
+
+> **Notes:**  
+
+>> 1) We calculated the active days per machine by filtering for the unique days on which a machine made at least one sale. Thereby, we assumed that there is no such day on which a machine was actually running but did not make at least one transaction.  
+  
+>> 2) Although in actual life, the number of items does not have a decimal, but since the difference between the two values is relatively small, the final result retains two decimals to show it.  
+
+
+
+```{r}
+# Select data of March
+transactional_data$date = as.Date(transactional_data$date, format = '%Y-%m-%d')
+transactional_data_march = transactional_data[month(date) == 3]
+# Collect machine size info
+machine_size = machine_data[, .(machine, small_machine)]
+# Number of transactions per machine in March
+table2 = transactional_data_march[, .(machine, timestamp)]
+monthly_items = table2[, .(.N), by = machine][order(machine)]
+# Number of days that each machine was working in March
+table3 = unique(transactional_data_march[, .(machine, date)])
+working_days = table3[, .(.N), by = machine][order(machine)]
+# Calculate the daily sales in terms of the number of items
+table4 = merge(monthly_items, working_days, by = 'machine')
+daily_items = merge(table4, machine_size, by = 'machine')
+daily_items$daily_items = daily_items$N.x / daily_items$N.y
+# Calculate the average daily sales grouped by machine size
+daily_items_size_diff = daily_items[,
+                                    round(mean(daily_items), 2),
+                                    by = small_machine]
+data.table(machine_type = c('Big machine', 'Small machine'),
+           daily_items = daily_items_size_diff$V1)
+```
+
+**Answer:** In March alone, the average daily items of big machine is **9.90** and that of small machine is **7.71**. We believe the reasons behind this difference can be:  
+
+> 1) Lower Stock-Keeping Unit compared to big machines.
+
+> Due to the limited space within small machines, the product variety is most likely smaller compared to their bigger counterparts. This might lead to situations in which customers don’t find  their desired products. Also, the limited product-range diminishes the cross-selling potential.
+
+> 2) Higher frequency of out-of-stock situations compared to big machines
+
+> Due to the comparably low capacity of small machines, the most popular products might be sold out quicker than in big machines. This can lead to situations in which customers are unable to make use of the entire product spectrum of the machine as certain items are out of stock.
+
+> 3) The placement of bigger machines is not randomly chosen, they are probably located in places where a higher demand was forecasted.  
+
+***
+
+# Question 2. Patterns in the Data  
+
+
+```{r, echo=FALSE}
+  ## Restore the plot: Number of items sold per machine and day
+  # 1) How many snacks or drinks to sell?
+  table5 = merge(transactional_data, product_data[, .(product_name, type_drink_snack)], by = 'product_name')
+  
+  table6_snack = table5[type_drink_snack == 'snack', .(date, timestamp)]
+  daily_items_total_snack = table6_snack[, .(.N), by = date][order(date)]
+  
+  table6_drink = table5[type_drink_snack == 'drink', .(date, timestamp)]
+  daily_items_total_drink = table6_drink[, .(.N), by = date][order(date)]
+  
+  # 2) How many machines are selling snacks or drinks respectively everyday?
+  table7_snack = unique(table5[type_drink_snack == 'snack', .(machine, date)])
+  snack_working_machines = table7_snack[, .(.N), by = date][order(date)]
+  
+  table7_drink = unique(table5[type_drink_snack == 'drink', .(machine, date)])
+  drink_working_machines = table7_drink[, .(.N), by = date][order(date)]
+  
+  # 3) Number of snacks or drinks sold per machine and day
+  dailyItemsPerMachineAndDay_snack = merge(daily_items_total_snack, snack_working_machines, by = 'date')
+  dailyItemsPerMachineAndDay_snack$daily_items = dailyItemsPerMachineAndDay_snack$N.x / dailyItemsPerMachineAndDay_snack$N.y
+  # dailyItemsPerMachineAndDay_snack
+  temp1_snack = dailyItemsPerMachineAndDay_snack[, .(date, daily_items)]
+  temp1_snack$type_drink_snack = c(rep('snack', nrow(temp1_snack)))
+  
+  dailyItemsPerMachineAndDay_drink = merge(daily_items_total_drink, drink_working_machines, by = 'date')
+  dailyItemsPerMachineAndDay_drink$daily_items = dailyItemsPerMachineAndDay_drink$N.x / dailyItemsPerMachineAndDay_drink$N.y
+  # dailyItemsPerMachineAndDay_drink
+  temp1_drink = dailyItemsPerMachineAndDay_drink[, .(date, daily_items)]
+  temp1_drink$type_drink_snack = c(rep('drink', nrow(temp1_drink)))
+  
+  # 4) Plot
+  snack_drink_daily_items = rbind(temp1_drink, temp1_snack)
+  snack_drink_daily_items$date = as.Date(snack_drink_daily_items$date, format = '%Y-%m-%d')
+  # snack_drink_daily_items$month = case_when(month(snack_drink_daily_items$date)==1 ~ 'Jan',
+  #                                           month(snack_drink_daily_items$date)==2 ~ 'Feb',
+  #                                           month(snack_drink_daily_items$date)==3 ~ 'Mar',
+  #                                           month(snack_drink_daily_items$date)==4 ~ 'Apr')
+  p1 = ggplot(data = snack_drink_daily_items,
+              mapping = aes(x = date, y = daily_items, color = type_drink_snack, group = type_drink_snack)) +
+    geom_line()
+  p1 + scale_x_date(date_breaks = '1 month', date_labels = '%b', date_minor_breaks = '1 week') +
+    xlab('Month') +
+    ylab('Daily Items') +
+    geom_smooth(method = "lm") +
+    labs(caption = 'Source: Self-elaborated')
+  
+# "%b" - Jan; "%B" - January
+```
+
+
+## a. Is there a general trend in the number of snacks and drinks as the months progress from January to April? Is it the same for snacks and drinks? Why do you think that might be so?  
+
+There is a general trend for both snacks and drinks, but the two cases are sightly different.  
+
+> 1) In the case of snacks, we see that there is a slight increase in sales during the month of February, but in general, the long term trend stays stable.  
+
+> 2) In the case of drinks, on the other hand, we see that the sales gradually increase month on month. Change in weather and temperature could be a possible reason for this. As the temperature rises, the sales for drinks also rises.  
+
+***
+
+## b. Is there shorter time period trend as well? Is it the same for snacks and drinks? What do you might be the cause?  
+
+In the short term, there is a spike in sales for both, snacks and drinks 4 times a month. These 4 spikes are during the weekends, as is confirmed by the data: peaks right before the minor breaks in the graph, which were Mondays of each week.  
+
+As for the reasons behind it, we think it can be:  
+
+> 1) people have more travel plans at weekends so it is more possible to drop by a vending machine in transpot stations or petrol stations;  
+
+> 2) also since it's weekend, people are more leisure and willing to stop by the machines to buy things.
+
+***
+
+# Question 3. Distribution of Average Income of the Area
+
+* Summary of `machine_data$income_average`:
+```{r, echo=FALSE}
+# Distribution of average income
+summary(machine_data$income_average)
+```
+
+## a. Are there outliers? How would you treat them? Provide code with your answer
+
+### 1) Check the outliers
+
+* Approach 1
+
+```{r}
+machine_data_dropNA = machine_data[!is.na(income_average)]
+library(ggplot2)
+ggplot(data = machine_data_dropNA,
+       mapping = aes(x = factor(machine), y = income_average)) +
+  geom_boxplot() +
+  labs(caption = 'Source: Self-elaborated')
+```  
+  
+* Approach 2: Display data through its quartiles.  
+  ** Lines extending outside the box (whiskers) indicates variability outside.  
+  ** The upper and lower quartiles. Points outside whiskers are outliers.  
+  ** For a given continuous variable, outliers are those observations that lie outside 1.5 * IQR, where IQR, the 'Inter Quartile Range' is the difference between 75th and 25th quartiles. Look at the points outside the whiskers in below box plot.
+
+```{r}
+options("scipen"=100, "digits"=4)
+outlier_values = boxplot.stats(machine_data$income_average)$out  # outlier values.
+boxplot(machine_data$income_average, main="Boxplot Income_Avg", boxwex=0.1)
+outlier_values # This provides a list with the values of the outliers.
+```  
+
+***
+
+### 2) Deal with the outliers  
+
+In order to not change it in the main data table, another one is created just for the purpose of this exercise. There are several options to be considered:  
+
+- Approach 1: REMOVE the rows that present outliers in the income_average column:  
+
+```{r}
+# machine_data_no_outliers = machine_data = fread('C:/Users/GEORGINA/Desktop/TERM 2/Data Analytics with R/Challenge 1/final_data/machine_data.csv')
+machine_data_no_outliers = subset(machine_data,!(machine_data$income_average %in%
+                                                   outlier_values))
+summary(machine_data_no_outliers)
+```
+
+> A similar option:  
+
+```{r}
+machine_data_no_outliers = machine_data[!machine_data$income_average %in%
+                                          boxplot.stats(machine_data$income_average)$out]
+summary(machine_data_no_outliers$income_average)
+```
+
+- Approach 2: IMPUTATION with mean / median / mode  
+
+Replacing the missing values with the mean / median / mode is a crude way of treating missing values. Depending on the context, like if the variation is low or if the variable has low leverage over the response, such a rough approximation is acceptable and could possibly give satisfactory results.  
+Create a function that detects the outliers and replaces them with the median (in this case) and then apply to desired column.  
+
+```{r }
+## Example:
+# outlier = function(x) {
+#   x[x < quantile(x,0.25) - 1.5 * IQR(x) | x > quantile(x,0.75) + 1.5 * IQR(x)] = median(x)
+#   x
+# }
+```
+
+- Approach 3: OTHER OPTIONS:  
+     # - CAPPING
+     # For missing values that lie outside the 1.5 * IQR limits, we could cap it by replacing those observations outside the lower limit with the value of 5th %ile and those that lie above the upper limit, with the value of 95th percentile.
+     # - PREDICTION
+     # Another way, is for the outliers to be replaced with missing values (NA) and then predict them by considering them as a response variable from the model.
+
+***
+     
+## b. Can you give three possibilities on how to treat the NA cases? Which option would you choose and why? Provide code with your answer.   
+
+1. First, check presence of NAs:
+
+```{r}
+sum(is.na(machine_data$income_average))
+```
+     
+2. Second, plot the relationship between having NA in the income_average and the average daily items:
+
+```{r}
+source("/Users/robinho/Downloads/SRC/descriptives.R")
+table8 = merge(machine_data[, .(machine, income_average)],
+               daily_items[, .(machine, daily_items)],
+               by = 'machine')
+arcvi_descriptive(table8$daily_items, table8$income_average)
+```
+
+3. Third, consider different methods to treat NA cases:  
+
+> Option 1: REMOVE NAs  
+
+```{r}
+machine_data_noNAs = machine_data[!is.na(machine_data$income_average)]
+summary(machine_data_noNAs)
+```
+
+> Option 2: REMOVE income_average as a feature from the model
+
+```{r}
+machine_data_noNAs = machine_data[,-7] # it is column 7 in the previous data table.
+summary(machine_data_noNAs)
+```
+        
+> Option 3: Others, such as  
+
+>> 3.1) IMPUTATION with mean / median / modem similar to the procedure with outliers, and  
+
+>> 3.2) PREDICTION, as read in a blog, through kNN imputation, rpart or mice (too complex for this exercise and not covered in class).  
+     
+> Fourth, final decision:
+
+>> First of all, since there is a considerable amount of N.A.s present in the dataset, we cannot arbitrarily remove them, nor transform them in any other way. Therefore, before making further more complex adjustments, at this point of the project, we decide to assess the impact of the feature `income_average` in our model, whose intention consists of predicting `daily_itmes`.
+
+***
+
+# Question 4. Median Number of Hotels in the Area  
+
+```{r, echo=FALSE}
+options("scipen"=100, "digits"=4)
+boxplot(machine_data$num_hotels, ylim = c(0,2))
+```
+
+```{r, echo=FALSE}
+boxplot(machine_data$num_hotels)
+summary(machine_data$num_hotels)
+```
+
+**Answer:** The **median** of the number of hotels is **0**, as can be derived from the boxplot. Also, due to the relatively low amount of outliers, the median is not highly impacted.
+
+***
+
+# Question 5. Linear Model: Daily items per machine ~ Location
+
+* Dataset Preparation:  
+
+```{r}
+machine_data$petrol_station = ifelse(is.na(machine_data$train_AvgDailyPassengers),
+                                     1,
+                                     0)
+machine_data_wDailyItems = merge(machine_data,
+                                 daily_items[, .(machine, daily_items)],
+                                 by = 'machine')
+head(machine_data_wDailyItems)
+```
+
+## a) Do all variables show statistical significance? Which ones doesn’t?  
+
+```{r}
+train1 = machine_data_wDailyItems[complete.cases(daily_items,
+                                                 small_machine,
+                                                 income_average,
+                                                 total_number_of_routes_600,
+                                                 num_hotels_45,
+                                                 petrol_station,
+                                                 num_vendex_nearby_300)]
+model1 = glm(daily_items ~ small_machine + income_average + 
+               total_number_of_routes_600 + num_hotels_45 + 
+               petrol_station + num_vendex_nearby_300,
+             data = train1)
+summary(model1)
+confint(model1)  
+```
+
+**Answer:** Apart from **`total_number_of_routes_600`** and **`num_vendex_nearby_300`**, all other variables show statistical significance, which are marked with the three star (***) significance cod and therefore they all have a very low p-value that is between 0 and 0.001.  
+
+***
+
+## b) Now we perform a log in base 10 calling it `log_transport` and check if this new variable shows statistical significance in "model2":
+
+```{r}
+machine_data_wDailyItems$log_transport = log(machine_data_wDailyItems$total_number_of_routes_600)
+train2 = machine_data_wDailyItems[complete.cases(daily_items,
+                                                 small_machine,
+                                                 income_average,
+                                                 log_transport,
+                                                 num_hotels_45,
+                                                 petrol_station,
+                                                 num_vendex_nearby_300)]
+model2 = glm(daily_items ~ small_machine + income_average +
+               log_transport + num_hotels_45 +
+               petrol_station + num_vendex_nearby_300,
+             data = train2)
+summary(model2)
+confint(model2)
+```
+
+**Answer:**  
+
+The new **`log_transport`** feature **shows statistical significance**. Through the logarythmic operation, `num_vendex_nearby_300` becomes statistically significant. Both variables show low p-values between 0 and 0.001.  
+
+Also, given that the coefficient of **`income_average`** is relatively small, we decided to **remove it** when setting up the final model.
+
+* Final model:
+
+```{r}
+final_train = machine_data_wDailyItems[complete.cases(daily_items,
+                                                      small_machine,
+                                                      log_transport,
+                                                      num_hotels_45,
+                                                      petrol_station,
+                                                      num_vendex_nearby_300)]
+final_model = glm(daily_items ~ small_machine + log_transport +
+                    num_hotels_45 + petrol_station + num_vendex_nearby_300,
+                  data = final_train)
+summary(final_model)
+confint(final_model)
+```
+
+***
+
+## c) How many daily items less do small machines sell all other factors remaining equal?  
+
+**Answer:** As can be interpreted from the `small_machine` coefficient in the final model, small machines sell **2.02341 items fewer** than large ones given that all other factors remain equal.  
+
+***
+
+## d) What’s effect on machine sales does having other nearby machines all other factors remaining equal?  
+
+**Answer:** As can be interpreted from the `num_vendex_nearby_300` coefficient in the final model, the increase of every new machine within a radius of 300 metres will cause an average **reduction of 0.10322** daily items sold per machine given all other factors remain equal given.  
+
+***
+
+## e) Ranking all machines according to the final_model, what are the real daily sales of the top20% machines with respect to your model prediction? And the real daily sales of the bottom20% machines according to your model? What’s the top20%/bottom20% ratio?  
+
+To assess the real daily sales with respect to the final model prediction of the top and bottom 20% machines, we create the two new variables "bottom20" and "top20". To get the resuts we divide the mean top20 through the bottom20.     
+    
+```{r}
+ predict_result = predict(final_model)
+ bottom20 = predict_result[order(predict_result)][1:round(length(predict_result)*0.2)]
+ top20 = predict_result[order(-predict_result)][1:round(length(predict_result)*0.2)]
+ top20_bottom20_ratio = mean(top20) / mean(bottom20)
+ top20_bottom20_ratio 
+```
+
+In our prediction, on average the top 20% machines sell **2.23 times** more items than the worst performing 20% of the machines.  
+  
+***
+  
+## f) Given the following 2 locations for a big machine, which location would you choose and why?
+> i. Supermarket entrance, 2 nearby hotels of 4 stars, 20 transport routes, no nearby machines  
+> ii. Transport station, no nearby hotels of 4 or 5 stars, 10 transport routes nearby, 3 nearby Vendex machines  
+
+1. To assess the two different locations we create the following two test dataset:  
+
+* location1: Big machine, supermarket entrance, 2 nearby hotels of 4 stars, 20 transport routes, no nearby machines
+```{r}
+location1 = data.table(small_machine = 0, log_transport = log(20), num_hotels_45 = 2,
+                       petrol_station = 0, num_vendex_nearby_300 = 0)
+```
+    
+* location2: Big machine, transport station, no nearby hotels of 4 or 5 stars, 10 transport routes nearby, 3 nearby Vendex machines
+```{r}
+location2 = data.table(small_machine = 0, log_transport = log(10), num_hotels_45 = 0,
+                       petrol_station = 0, num_vendex_nearby_300 = 3) 
+```
+    
+2. To decide which location we prefer assessing the daily item sales in both locations:
+
+```{r}
+loc1_daily_sales_pre = predict(final_model, newdata = location1, type = "response")
+paste0('Predicted daily item sales in location 1: ',
+       round(loc1_daily_sales_pre[[1]], 2),
+       ' items.')
+
+loc2_daily_sales_pre = predict(final_model, newdata = location2, type = "response")
+paste0('Predicted daily item sales in location 2: ',
+       round(loc2_daily_sales_pre[[1]], 2),
+       ' items.')
+```
+
+**Conclusion:** We decide to choose the **first location** because in our prediction it delivers a higher ammount of daily item sales.  
+

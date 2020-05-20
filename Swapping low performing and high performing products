@@ -1,0 +1,664 @@
+library(data.table)
+library(pROC)
+library(stats)
+library(ggplot2)
+library(tidyverse)
+
+options("scipen" = 100, "digits" = 4)
+
+md = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/machine_data.csv')
+pd = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/product_data.csv')
+td = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/transactional_data.csv')
+mf = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/machine_failures.csv')
+
+# 1. Prepare the machine features ------------
+# Data loading ------------------------------------------------------------
+td = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/transactional_data.csv')
+md = fread('/Users/robinho/Nutstore Files/01 ESADE/Study/05 MSc Business Analytics 19_20/04 Term2/01 R language/Data Analytics with R/Challenge/Challenge 2/DATA/machine_data.csv')
+
+# Model data creation -----------------------------------------------------
+daily_sales_dt = td[,.(daily_sales = .N/uniqueN(date)),by=machine]
+data = merge(daily_sales_dt,
+             md,
+             by='machine',all.x=T)
+
+# Driver importance -------------------------------------------------------
+vars = setdiff(names(data),c('machine','daily_sales','location_type'))
+
+dt = data.table()
+for (v in vars) {
+  print(v)
+  aux = data[complete.cases(eval(parse(text=v)))]
+  dt = rbind(dt, data.table(var = v,
+                            tbr = tbr(aux$daily_sales, aux[[v]]),
+                            cor = cor(aux$daily_sales, aux[[v]])))
+}
+
+dt[, sign := ifelse(tbr<1, '-', '+')]
+dt[tbr<1, tbr := 1/tbr]
+dt[order(-tbr)]
+
+# Treat variables ---------------------------------------------------------
+data[,income_average:=as.numeric(income_average)]
+data[,log_transport:=log10(total_number_of_routes_600)]
+data[is.na(log_transport),
+     log_transport:=mean(data$log_transport,na.rm=T)]
+data[,isna_train_AvgDailyPassengers:=ifelse(is.na(train_AvgDailyPassengers),1,0)]
+data[,no_income:=ifelse(is.na(income_average),1,0)]
+data[is.na(income_average),income_average:=mean(data$income_average,na.rm=T)]
+
+# Calculate the big machine boost with a GLM ---------------------------------
+set.seed(1)
+r = runif(nrow(data))
+train = data[r>0.3]
+test = data[r<=0.3]
+
+model_vars = c('isna_train_AvgDailyPassengers',
+               'num_hotels_45', 'log_transport',
+               'num_vendex_nearby_300', 'income_average')
+
+# 2. Prepare the product features ---------------------
+# snack ~ location, size
+td_selected = td %>% 
+  select(machine, timestamp, date, product_name)
+pd_selected = pd %>%
+  select(product_name, category, type_drink_snack)
+machine_size = md %>%
+  select(machine, small_machine)
+dt2 = merge(td_selected, pd_selected, by = 'product_name')
+dt3 = merge(dt2, machine_size, by = 'machine')
+length(unique(dt3[small_machine==0]$product_name))
+
+dt2[, .N, by = .(machine, type_drink_snack)][order(machine)]
+dt2[, .N, by = .(machine)][order(machine)]
+
+dt2_2 = merge(dt2[, .N, by = .(machine, type_drink_snack)][order(machine)][type_drink_snack=='snack'], dt2[, .N, by = .(machine)][order(machine)], by = 'machine')
+dt2_2[, snack_pct := N.x/N.y]
+
+snack_pct_dt = dt2_2 %>%
+  select(machine, snack_pct)
+
+data_2 = merge(snack_pct_dt,
+             md,
+             by='machine',all.x=T)
+
+# Treat variables ---------------------------------------------------------
+data_2[,income_average:=as.numeric(income_average)]
+data_2[,log_transport:=log10(total_number_of_routes_600)]
+data_2[is.na(log_transport), log_transport := mean(data_2$log_transport,na.rm=T)]
+data_2[,isna_train_AvgDailyPassengers:=ifelse(is.na(train_AvgDailyPassengers),1,0)]
+data_2[,no_income:=ifelse(is.na(income_average),1,0)]
+data_2[is.na(income_average),income_average:=mean(data$income_average,na.rm=T)]
+
+# Calculate the big machine boost with a GLM ---------------------------------
+set.seed(1)
+r = runif(nrow(data_2))
+train = data_2[r>0.3]
+test = data_2[r<=0.3]
+
+model_vars_1 = c('isna_train_AvgDailyPassengers',
+               'num_hotels_45', 'log_transport',
+               'num_vendex_nearby_300', 'income_average', 'small_machine')
+
+m1 = glm(snack_pct~., data=train[,c(model_vars_1,'snack_pct'),with=F],family='gaussian')
+summary(m1)
+
+model_vars_2 = c('isna_train_AvgDailyPassengers',
+                 'log_transport', 'small_machine')
+
+m2 = glm(snack_pct~., data=train[,c(model_vars_2,'snack_pct'),with=F],family='gaussian')
+summary(m2)
+# Coefficients:
+#   Estimate Std. Error t value             Pr(>|t|)    
+# (Intercept)                      0.59562    0.00476  125.08 < 0.0000000000000002 ***
+#   isna_train_AvgDailyPassengers  0.01557    0.00326    4.77            0.0000020 ***
+#   log_transport                  0.01317    0.00291    4.53            0.0000062 ***
+#   small_machine                  0.09632    0.00324   29.76 < 0.0000000000000002 ***
+
+## On average, small machines have a 9% of sales of snacks higher than big machines.
+
+# 3. 货的种类和机器大小是否有关？
+td_selected = td %>% 
+  select(machine, timestamp, date, product_name)
+pd_selected = pd %>%
+  select(product_name, category, type_drink_snack)
+machine_size = md %>%
+  select(machine, small_machine)
+dt2 = merge(td_selected, pd_selected, by = 'product_name')
+dt3 = merge(dt2, machine_size, by = 'machine')
+length(unique(dt3[small_machine==0]$product_name)) # 63
+length(unique(dt3[small_machine==1]$product_name)) # 60
+## 应该无关
+
+# 4. Big/small machine内部，product种类数与location的关系  # s3来自文件1
+data_3 = merge(data, s3, by = c('machine', 'small_machine'))
+data_3_s = data_3[small_machine==1]
+data_3_b = data_3[small_machine==0]
+
+# Inside small machines ---------------------------------
+set.seed(1)
+r = runif(nrow(data_3_s))
+train = data_3_s[r>0.3]
+test = data_3_s[r<=0.3]
+
+model_vars_3 = c('isna_train_AvgDailyPassengers',
+                 'num_hotels_45', 'log_transport',
+                 'num_vendex_nearby_300', 'income_average')
+
+m3 = glm(N~., data=train[,c(model_vars_3,'N'),with=F],family='gaussian')
+summary(m3)
+
+model_vars_4 = c('isna_train_AvgDailyPassengers',
+                 'log_transport')
+
+m4 = glm(N~., data=train[,c(model_vars_4,'N'),with=F],family='gaussian')
+summary(m4)
+
+# Coefficients:
+#   Estimate Std. Error t value             Pr(>|t|)    
+# (Intercept)                       32.222      0.208  155.23 < 0.0000000000000002 ***
+#   isna_train_AvgDailyPassengers   -0.825      0.153   -5.40          0.000000091 ***
+#   log_transport                    0.410      0.132    3.11               0.0019 ** 
+#   ---
+#   Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+m5 = glm(N~., data=train[,c('daily_sales','N'),with=F],family='gaussian')
+summary(m5)
+
+cor.test(data_3_s$N, data_3_s$daily_sales)
+
+mean(data_3_s[N>=35]$daily_sales)
+mean(data_3_s$daily_sales)
+
+data_3_s[N==39]$machine
+transactional_data$date = as.Date(transactional_data$date, format = '%Y-%m-%d')
+a = transactional_data[machine==2354]
+a[, month := month(date)]
+a_map = a[, .N, by = .(month, product_name)]
+
+uniqueN(a_map[month==1]$product_name)
+uniqueN(a_map[month==2]$product_name)
+uniqueN(a_map[month==3]$product_name)
+uniqueN(a_map[month==4]$product_name)
+uniqueN(a_map$product_name)
+table(a_map$month, a_map$product_name)
+
+# Inside big machines ---------------------------------
+set.seed(1)
+r = runif(nrow(data_3_b))
+train = data_3_b[r>0.3]
+test = data_3_b[r<=0.3]
+
+model_vars_3 = c('isna_train_AvgDailyPassengers',
+                 'num_hotels_45', 'log_transport',
+                 'num_vendex_nearby_300', 'income_average')
+
+m3 = glm(N~., data=train[,c(model_vars_3,'N'),with=F],family='gaussian')
+summary(m3)
+
+model_vars_4 = c('isna_train_AvgDailyPassengers')
+
+m4 = glm(N~., data=train[,c(model_vars_4,'N'),with=F],family='gaussian')
+summary(m4)
+
+# Coefficients:
+#   Estimate Std. Error t value            Pr(>|t|)    
+# (Intercept)                       42.860      0.104   412.3 <0.0000000000000002 ***
+#   isna_train_AvgDailyPassengers   -1.498      0.145   -10.3 <0.0000000000000002 ***
+#   ---
+#   Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+m5 = glm(N~., data=train[,c('daily_sales','N'),with=F],family='gaussian')
+summary(m5)
+
+cor.test(data_3_b$N, data_3_b$daily_sales)
+
+# 5. Whether average sales of small machines with many types are also high？
+
+daily_sales_dt
+
+
+# ----------------------------
+# swap = c[yearly_profit>cost_of_moving]
+# names(swap) = c('big_machine_swap', 'decrease', 'small_machine_swap', 'increase', 'profit', 'yearly_profit')
+
+
+
+# -----------------------
+product_machine = group_by(td, product_name, machine) %>%
+  summarise(N = n()) %>%
+  data.table()
+unique_days = td[, uniqueN(date), by = machine]
+product_machine = merge(product_machine, unique_days, by = 'machine')
+product_machine = product_machine[, item_daily_sales := N/V1]
+names(product_machine) = c('machine', 'product_name', 'item_sales', 'active_days', 'item_daily_sales')
+
+product_list = unique(product_machine$product_name)
+
+tbr = function(a, b){
+  top = mean(a[order(-b)][1:floor(0.2*length(a))])
+  bot = mean(a[order(b)][1:floor(0.2*length(a))])
+  return(top/bot)
+}
+
+# Cycle start
+# for (i in length(product_list)) {
+#   
+# }
+p_selected = product_machine[product_name == product_list[2]]
+print(product_list[2])
+
+data = merge(p_selected,
+             md,
+             by='machine',all.x=T)
+
+# Driver importance -------------------------------------------------------
+vars = setdiff(names(data),c('machine', 'item_daily_sales','location_type', 'product_name', 'item_sales', 'active_days'))
+
+dt = data.table()
+for (v in vars) {
+  print(v)
+  aux = data[complete.cases(eval(parse(text=v)))]
+  dt = rbind(dt, data.table(var = v,
+                            tbr = tbr(aux$item_daily_sales, aux[[v]]),
+                            cor = cor(aux$item_daily_sales, aux[[v]])))
+}
+
+dt[, sign := ifelse(tbr<1, '-', '+')]
+dt[tbr<1, tbr := 1/tbr]
+dt[order(-tbr)]
+
+# Treat variables ---------------------------------------------------------
+data[,income_average:=as.numeric(income_average)]
+data[,log_transport:=log10(total_number_of_routes_600)]
+data[is.na(log_transport),
+     log_transport:=mean(data$log_transport,na.rm=T)]
+data[,isna_train_AvgDailyPassengers:=ifelse(is.na(train_AvgDailyPassengers),1,0)]
+data[,no_income:=ifelse(is.na(income_average),1,0)]
+data[is.na(income_average),income_average:=mean(data$income_average,na.rm=T)]
+
+# Calculate the big machine boost with a GLM ---------------------------------
+set.seed(1)
+r = runif(nrow(data))
+train = data[r>0.3]
+test = data[r<=0.3]
+
+model_vars_1 = c('isna_train_AvgDailyPassengers',
+               'num_hotels_45', 'log_transport',
+               'num_vendex_nearby_300', 'income_average')
+m1 = glm(item_daily_sales~., data=train[,c(model_vars_1,'item_daily_sales'),with=F],family='gaussian')
+summary(m1)
+
+model_vars_2 = c('isna_train_AvgDailyPassengers',
+                 'log_transport',
+                 'income_average')
+m2 = glm(item_daily_sales~., data=train[,c(model_vars_2,'item_daily_sales'),with=F],family='gaussian')
+summary(m2)
+
+
+
+data[,pred_sales:=predict(m2,data)]
+sales_product = data %>%
+  select(machine, product_name, item_daily_sales, pred_sales, active_days)
+sales_product[, diff := ifelse(item_daily_sales<pred_sales,
+                               yes = (pred_sales - item_daily_sales) * active_days,
+                               no = 0)]
+sales_product[diff != 0]
+
+
+# Use caret to do loops, modeling ---------------
+# libraries needed
+library(caret)
+
+# 0. Calulate product sales
+product_machine = group_by(td, product_name, machine) %>%
+  summarise(N = n()) %>%
+  data.table()
+unique_days = td[, uniqueN(date), by = machine]
+product_machine = merge(product_machine, unique_days, by = 'machine')
+product_machine = product_machine[, item_daily_sales := N/V1]
+names(product_machine) = c('machine', 'product_name', 'item_sales', 'active_days', 'item_daily_sales')
+
+product_list = unique(product_machine$product_name)
+
+# cor.test(product_machine[machine==1]$item_daily_sales, product_machine[machine==2]$item_daily_sales)
+# test = product_machine %>% select(machine, product_name, item_daily_sales)
+
+# 1. features
+data <- md
+data[,income_average:=as.numeric(income_average)]
+data[,log_transport:=log10(total_number_of_routes_600)]
+data[is.na(log_transport),
+     log_transport:=mean(data$log_transport,na.rm=T)]
+data[,isna_train_AvgDailyPassengers:=ifelse(is.na(train_AvgDailyPassengers),1,0)]
+data[,no_income:=ifelse(is.na(income_average),1,0)]
+data[is.na(income_average),income_average:=mean(data$income_average,na.rm=T)]
+
+
+# caret_models = list()
+# caret_models$models = NULL
+
+## ========Cycle start======== ##
+# for (i in 1:length(product_list)) {
+#   
+# }
+for (i in 1:length(product_list)) {
+  
+# 2. Insert Product daily sales
+  p_selected = product_machine[product_name == product_list[i]]
+  print(product_list[i])
+
+  data1 = merge(p_selected,
+               data,
+               by='machine',all.x=T)
+  
+  # 3. caret running model
+  inTrain <- createDataPartition(y = data1$item_daily_sales,
+                                 p = 0.75,
+                                 list = F)  # Matrix (Data Frame) or List
+  
+  train <- data1[inTrain,]
+  test <- data1[-inTrain,]
+  
+  data_ctrl <- trainControl(method = "cv", number = 5)  # Direct Cross-Validation process
+  
+  gbm_grid <- expand.grid(interaction.depth = c(1, 3, 5), 
+                          n.trees = (0:50) * 50,
+                          shrinkage = c(0.01, 0.001),
+                          n.minobsinnode = 10)
+  
+  model_vars = c('small_machine','isna_train_AvgDailyPassengers',
+                 'num_hotels_45', 'log_transport',
+                 'num_vendex_nearby_300', 'income_average')
+  
+  gbm_caret <- train(item_daily_sales ~ .,  # Formula
+                     data = train[,c(model_vars,'item_daily_sales'),with=F],  # Data
+                     trControl = data_ctrl,  # Cross-Validation
+                     # preProc = c("center", "scale"),
+                     method = "gbm",
+                     tuneGrid = gbm_grid,  # Possible combinations of the hyperparameters
+                     metric = 'RMSE')  # Metric used to evaluate the model
+  
+  # gbm_caret$finalModel
+  # gbm_caret$bestTune  # Look at the best combination selected by the machine
+  # gbm_caret$resample  # Results of the C-V of the final model
+  # gbm_caret_results <- gbm_caret[['results']]
+  
+  file_name = paste0(product_list[i], '_model.rds')
+  saveRDS(gbm_caret, file = file_name)
+  
+  # 4. Put into model collection
+  
+  # caret_models = list()
+  # caret_models$models = NULL
+
+  # caret_models = append(caret_models$models, gbm_caret)
+  # print(caret_models)
+
+}
+# 5. Put test data
+# 5-1 Study 1: select products for a mchine
+    # Put data -> Calculate each product's predicted daily sales * margin -> Sort from largest to smallest
+
+new_machine = data.table(small_machine = 1, isna_train_AvgDailyPassengers = 1,
+                         num_hotels_45 = 2, log_transport = log10(100),
+                         num_vendex_nearby_300 = 3, income_average = 10000) 
+
+product_name = c()
+product_daily_sales = c()
+
+for (i in 1:length(product_list)) {
+  file_name = paste0(product_list[i], '_model.rds')
+  model_test = readRDS(file = file_name)
+  prediction_new_machine <- predict(object = model_test,
+                                    type = 'raw',
+                                    newdata = new_machine)
+  product_name[i] = product_list[i]
+  product_daily_sales[i] = prediction_new_machine
+}
+
+new_machine_product = data.table(product_name, product_daily_sales)
+new_machine_product
+
+# Ranking
+pd[, margin := price / (1 + tax_rate) - cost]
+margin_info = pd %>%
+  select(product_name, margin, category, type_drink_snack)
+new_machine_product_1 = new_machine_product
+new_machine_product_2 = merge(new_machine_product_1,
+                              margin_info,
+                              by = 'product_name')
+new_machine_product_2[, daily_sales_euro := product_daily_sales * margin]
+new_machine_product_2[order(-daily_sales_euro)]
+new_machine_product_2[1:40]
+
+# prediction_new_machine <- predict(object = model_test,
+#                                   type = 'raw',
+#                                   newdata = new_machine)
+# product_name[2] = product_list[2]
+# product_daily_sales[2] = prediction_new_machine
+# 
+# 
+# new_machine_product = data.table(product_name, product_daily_sales)
+# new_machine_product
+
+# -----------------------
+product_name = c()
+num_machines = c()
+for (i in 1:63) {
+  p_selected = product_machine[product_name == product_list[i]]
+  # print(paste0(product_list[i], ": ", nrow(p_selected), "Row data"))
+  product_name[i] = product_list[i]
+  num_machines[i] = nrow(p_selected)
+}
+product_distribution = data.table(product_name, num_machines)
+product_distribution[order(-num_machines)]
+test = new_machine_product
+merge(test, product_distribution, by = 'product_name')[order(-num_machines)]
+
+data1 = merge(p_selected,
+              data,
+              by='machine',all.x=T)
+
+# 3. caret Running model
+inTrain <- createDataPartition(y = data1$item_daily_sales,
+                               p = 0.75,
+                               list = F)  # Matrix (Data Frame) or List
+
+train <- data1[inTrain,]
+test <- data1[-inTrain,]
+
+data_ctrl <- trainControl(method = "cv", number = 5)  # Direct Cross-Validation process
+
+gbm_grid <- expand.grid(interaction.depth = c(1, 3, 5), 
+                        n.trees = (0:50) * 50,
+                        shrinkage = c(0.01, 0.001),
+                        n.minobsinnode = 10)
+
+model_vars = c('small_machine','isna_train_AvgDailyPassengers',
+               'num_hotels_45', 'log_transport',
+               'num_vendex_nearby_300', 'income_average')
+
+gbm_caret <- train(item_daily_sales ~ .,  # Formula
+                   data = train[,c(model_vars,'item_daily_sales'),with=F],  # Data
+                   trControl = data_ctrl,  # Cross-Validation
+                   # preProc = c("center", "scale"),
+                   method = "gbm",
+                   tuneGrid = gbm_grid,  # Possible combinations of the hyperparameters
+                   metric = 'RMSE')  # Metric used to evaluate the model
+
+# gbm_caret$finalModel
+# gbm_caret$bestTune  # Look at best combination selected by the machine
+# gbm_caret$resample  # Results of the C-V of the final model
+# gbm_caret_results <- gbm_caret[['results']]
+
+file_name = paste0(product_list[i], '_model.rds')
+saveRDS(gbm_caret, file = file_name)
+
+# Sales records ----------
+s1_dup[, .N, by = 'product_name'][order(-product_name)]
+
+
+# efficiency Cross check --------------------
+# Fix variable formats
+td[,class(timestamp)]
+td[,timestamp:=ymd_hms(timestamp)]
+td[,class(timestamp)]
+
+pd[,margin:=(price/(1+tax_rate)) - cost] # price = (cost+margin)*(1+tax)
+tdp = merge(td,pd,by='product_name',all.x=T)
+
+tdp[,active_days_machine:=uniqueN(date),by=machine] # number of active days of each machine (hypothesis: if the machine doesnt sell anything in the whole day is because is broken)
+
+daily_products = tdp[,.(daily_items = .N / active_days_machine[1]),
+                     by=.(machine,product_name,category,type_drink_snack)] # daily items per product and machine
+
+# Situation 1: according to drink/snack minute
+daily_products[,daily_items_avg_cat:=mean(daily_items),by=.(machine, type_drink_snack)] # average daily snacks/drinks per machine
+daily_products[,efficiency:=daily_items/daily_items_avg_cat] # efficiency of the product in each machine standardizing by the "average snack/drink"  # equal to 1 meands average
+
+# The average efficiency of the product on all machines
+daily_products[, efficiency_avg_product := mean(efficiency), by = .(product_name)]
+
+efficiency_table = daily_products[,.(efficiency_avg=mean(efficiency),
+                                     num_machines_present = uniqueN(machine)),
+                                  by=.(product_name,category,type_drink_snack)][order(category,-efficiency_avg)] # average product efficiency over all machines and machine presence
+
+efficiency_table[,pct_machines_present:=num_machines_present/uniqueN(tdp$machine)]
+
+efficiency_table_1 = efficiency_table
+efficiency_table_1[, machine_label := paste0(num_machines_present, ' machines (', round(pct_machines_present*100, 2), '%)')]
+
+library(ggplot2)
+# ggplot(data = daily_products,
+#        aes(x = product_name, y = efficiency)) +
+#   geom_point()
+
+# DRINKS
+meds_drinks = c(by(daily_products[type_drink_snack=='drink']$efficiency, daily_products[type_drink_snack=='drink']$product_name, mean))
+meds_drinks = meds_drinks[order(-meds_drinks)]
+# ggplot(mtcars, aes(factor(cyl), mpg)) +
+#   geom_boxplot() + 
+#   geom_text(data=data.frame(), aes(x=names(meds), y=meds, label=1:3), col='red', size=10)
+
+ggplot(data = daily_products[type_drink_snack=='drink'],
+       aes(x = reorder(product_name, efficiency, FUN = mean), y = efficiency)) +
+  geom_boxplot() + 
+  coord_flip() + 
+  # geom_hline(yintercept = (efficiency_table[order(-efficiency_avg)][type_drink_snack=='drink'][5]$efficiency_avg + efficiency_table[order(-efficiency_avg)][type_drink_snack=='drink'][6]$efficiency_avg)/2,
+  #            color = 'green',
+  #            lty = 2) +
+  geom_vline(xintercept = 5.5,
+             color = 'red',
+             lty = 2) +
+  # geom_hline(yintercept = (efficiency_table[order(-efficiency_avg)][type_drink_snack=='drink'][25]$efficiency_avg + efficiency_table[order(-efficiency_avg)][type_drink_snack=='drink'][26]$efficiency_avg)/2,
+  #            color = 'red',
+  #            lty = 2) +
+  geom_vline(xintercept = 25.5,
+             color = 'green',
+             lty = 2) +
+  stat_summary(fun.y=mean,
+               geom="line",
+               aes(group=1),
+               color = 'grey',
+               lty = 2)  + 
+  stat_summary(fun.y=mean,
+               geom="point",
+               color = 'grey') +
+  geom_text(data=data.frame(),
+            aes(x=names(meds_drinks),
+                y=meds_drinks,
+                label=1:30),
+            col='red',
+            size=4,
+            nudge_y = 0.08) +
+  geom_text(data = efficiency_table_1[order(-efficiency_avg)][type_drink_snack=='drink'],
+            aes(x=names(meds_drinks),
+                y=8,
+                label=machine_label),
+            hjust=0) +
+  labs(title = 'Drinks efficiency ranking',
+       x = 'Products',
+       y = 'Efficiency')
+
+# SNACKS
+meds_snacks = c(by(daily_products[type_drink_snack=='snack']$efficiency, daily_products[type_drink_snack=='snack']$product_name, mean))
+meds_snacks = meds_snacks[order(-meds_snacks)]
+
+ggplot(data = daily_products[type_drink_snack=='snack'],
+       aes(x = reorder(product_name, efficiency, FUN = mean), y = efficiency)) +
+  geom_boxplot() + 
+  coord_flip() + 
+  # geom_hline(yintercept = (efficiency_table[order(-efficiency_avg)][type_drink_snack=='snack'][5]$efficiency_avg + efficiency_table[order(-efficiency_avg)][type_drink_snack=='snack'][6]$efficiency_avg)/2,
+  #            color = 'green',
+  #            lty = 3) +
+  geom_vline(xintercept = 5.5,
+             color = 'red',
+             lty = 2) +
+  # geom_hline(yintercept = (efficiency_table[order(-efficiency_avg)][type_drink_snack=='snack'][28]$efficiency_avg + efficiency_table[order(-efficiency_avg)][type_drink_snack=='snack'][29]$efficiency_avg)/2,
+  #            color = 'red',
+  #            lty = 3) +
+  geom_vline(xintercept = 28.5,
+             color = 'green',
+             lty = 2) +
+  stat_summary(fun.y=mean,
+               geom="line",
+               aes(group=1),
+               color = 'grey',
+               lty = 3)  + 
+  stat_summary(fun.y=mean,
+               geom="point",
+               color = 'grey') +
+  geom_text(data=data.frame(),
+            aes(x=names(meds_snacks),
+                y=meds_snacks,
+                label=1:33),
+            col='red',
+            size=4,
+            nudge_y = 0.08) +
+  geom_text(data = efficiency_table_1[order(-efficiency_avg)][type_drink_snack=='snack'],
+            aes(x=names(meds_snacks),
+                y=6.1,
+                label=machine_label),
+            hjust=0) +
+  labs(title = 'Snacks efficiency ranking',
+       x = 'Products',
+       y = 'Efficiency')
+
+
+# ggplot(data = daily_products[type_drink_snack=='drink'],
+#        aes(x = product_name, y = efficiency)) +
+#   geom_violin(fill = 'lightblue') +
+#   geom_boxplot(fill = 'lightgreen')
+
+
+
+# health check
+test2 = select(td,machine, product_name, timestamp)[order(machine, product_name, timestamp)]
+test1 = td[, .N, by = .(machine, product_name)]
+summary(test1$N)
+
+t3 = test2[product_name == 'sport_energy_drinks_1' & machine==972]
+t3[, last_vend := shift(timestamp,1), by = machine]
+t3[, deltahours := difftime(timestamp, last_vend, units='hours')]
+t3[, deltahours_n := as.numeric(deltahours)]
+boxplot(t3$deltahours_n)
+
+machine_failures[,timestamp:=ymd_hms(timestamp)]
+
+t4 = merge(t3, machine_failures, by = c('machine', 'timestamp'), all.x = T)
+
+summary(t4$failure)  
+
+t5 = t4[!is.na(deltahours_n)==TRUE & is.na(failure)==TRUE]
+boxplot(t5$deltahours_n)
+summary(t5$deltahours_n)
+# 8:     972    sport_energy_drinks_1 255
+
+ggplot(data = t5, aes(y = deltahours_n)) +
+  geom_boxplot(stat = "identity", position = 'stack')
+
+
+# current sales
+pd[, margin := price / (1 + tax_rate) - cost]
+merge(pd, td, by = 'product_name')[, sum(margin)] * 4
